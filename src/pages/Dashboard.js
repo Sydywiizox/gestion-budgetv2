@@ -8,18 +8,18 @@ import {
   onSnapshot, 
   doc, 
   deleteDoc, 
-  where, 
   addDoc, 
   serverTimestamp, 
   Timestamp, 
   writeBatch, 
-  getDocs 
+  getDocs,
+  updateDoc
 } from 'firebase/firestore';
 import moment from 'moment';
 import 'moment/locale/fr';
 import toast from 'react-hot-toast';
 import Modal from '../components/Modal';
-import TransactionForm from '../components/TransactionForm';
+import BalanceChart from '../components/BalanceChart';
 import { useNavigate } from 'react-router-dom';
 import { PencilIcon, TrashIcon, FunnelIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 
@@ -51,64 +51,65 @@ export default function Dashboard() {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showChart, setShowChart] = useState(true); // Nouvel état pour contrôler l'affichage du graphique
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingTransaction, setEditingTransaction] = useState(null);
 
   useEffect(() => {
     if (!currentUser) return;
 
-    const transactionsRef = collection(db, 'users', currentUser.uid, 'transactions');
     const q = query(
-      transactionsRef,
+      collection(db, 'users', currentUser.uid, 'transactions'),
       orderBy('date', 'desc')
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const newTransactions = snapshot.docs.map(doc => ({
-        id: doc.id,
-        ...doc.data(),
-        date: doc.data().date.toDate()
-      }));
-
-      setTransactions(newTransactions);
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const transactionsData = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data && data.date) {
+          transactionsData.push({
+            id: doc.id,
+            ...data,
+            date: data.date.toDate()
+          });
+        } else {
+          console.warn(`Transaction ${doc.id} ignorée car la date est manquante ou invalide`);
+        }
+      });
+      setTransactions(transactionsData);
       
-      // Initialiser les dates de filtrage
-      if (newTransactions.length > 0) {
-        const dates = newTransactions.map(t => t.date);
-        const oldestDate = moment(Math.min(...dates)).format('YYYY-MM-DD');
-        const futurestDate = moment(Math.max(...dates)).format('YYYY-MM-DD');
-        
-        setFilters(prev => ({
-          ...prev,
-          startDate: prev.startDate || oldestDate,
-          endDate: prev.endDate || futurestDate
-        }));
-      }
-      
-      // Calculer les soldes actuel et futur
+      // Calculer les soldes
       const now = new Date();
       let currentBalance = 0;
       let futureBalance = 0;
 
-      newTransactions.forEach(transaction => {
+      // Trier les transactions par date
+      const sortedTransactions = [...transactionsData].sort((a, b) => a.date - b.date);
+
+      sortedTransactions.forEach(transaction => {
         const amount = transaction.amount || 0;
         const transactionAmount = transaction.type === 'income' ? amount : -amount;
+        const transactionDate = moment(transaction.date);
         
-        if (moment(transaction.date).isAfter(now)) {
+        // Si la transaction est dans le futur, l'ajouter au solde futur
+        if (transactionDate.isAfter(now, 'day')) {
           futureBalance += transactionAmount;
+        } else {
+          // Sinon, l'ajouter au solde actuel
+          currentBalance += transactionAmount;
         }
-        currentBalance += transactionAmount;
       });
 
       setBalances({
         current: currentBalance,
-        future: currentBalance + futureBalance
+        future: currentBalance + futureBalance // Le solde futur inclut le solde actuel
       });
-      
+
       // Calculer les statistiques mensuelles
-      const currentMonthStart = moment(now).startOf('month').toDate();
-      const currentMonthEnd = moment(now).endOf('month').toDate();
-      const previousMonthStart = moment(now).subtract(1, 'month').startOf('month').toDate();
-      const previousMonthEnd = moment(now).subtract(1, 'month').endOf('month').toDate();
-      
+      const currentMonthStart = moment().startOf('month');
+      const previousMonthStart = moment().subtract(1, 'month').startOf('month');
+
       const currentMonthStats = {
         income: 0,
         expenses: 0
@@ -119,23 +120,20 @@ export default function Dashboard() {
         expenses: 0
       };
 
-      newTransactions.forEach(transaction => {
+      transactionsData.forEach(transaction => {
         const amount = transaction.amount || 0;
-        const transactionDate = transaction.date;
+        const transactionDate = moment(transaction.date);
         
-        // Vérifier si la transaction est dans le mois actuel
-        if (moment(transactionDate).isSame(currentMonthStart, 'month')) {
+        if (transactionDate.isSame(currentMonthStart, 'month')) {
           if (transaction.type === 'income') {
             currentMonthStats.income += amount;
-          } else if (transaction.type === 'expense') {
+          } else {
             currentMonthStats.expenses += amount;
           }
-        }
-        // Vérifier si la transaction est dans le mois précédent
-        else if (moment(transactionDate).isSame(previousMonthStart, 'month')) {
+        } else if (transactionDate.isSame(previousMonthStart, 'month')) {
           if (transaction.type === 'income') {
             previousMonthStats.income += amount;
-          } else if (transaction.type === 'expense') {
+          } else {
             previousMonthStats.expenses += amount;
           }
         }
@@ -145,11 +143,10 @@ export default function Dashboard() {
         currentMonth: currentMonthStats,
         previousMonth: previousMonthStats
       });
-
-      setLoading(false);
-    }, (error) => {
-      console.error("Erreur lors de la récupération des transactions:", error);
-      toast.error("Erreur lors de la récupération des transactions");
+      
+      if (transactionsData.length > 0) {
+        updateFilterDates(transactionsData);
+      }
       setLoading(false);
     });
 
@@ -157,36 +154,73 @@ export default function Dashboard() {
   }, [currentUser]);
 
   useEffect(() => {
-    let filtered = [...transactions];
+    const getFilteredTransactions = () => {
+      return transactions.filter(transaction => {
+        const transactionDate = moment(transaction.date);
+        const startDate = filters.startDate ? moment(filters.startDate).startOf('day') : null;
+        const endDate = filters.endDate ? moment(filters.endDate).endOf('day') : null;
 
-    // Filtre par recherche
-    if (filters.searchQuery) {
-      const query = filters.searchQuery.toLowerCase();
-      filtered = filtered.filter(t => 
-        t.description.toLowerCase().includes(query)
-      );
-    }
+        // Vérification des dates
+        if (startDate && endDate) {
+          const isInDateRange = transactionDate.isSameOrAfter(startDate, 'day') && 
+                              transactionDate.isSameOrBefore(endDate, 'day');
+          if (!isInDateRange) return false;
+        }
 
-    // Filtre par date
-    if (filters.startDate) {
-      const startDate = new Date(filters.startDate);
-      filtered = filtered.filter(t => moment(t.date).isSameOrAfter(startDate));
-    }
-    if (filters.endDate) {
-      const endDate = new Date(filters.endDate);
-      endDate.setHours(23, 59, 59, 999); // Inclure toute la journée
-      filtered = filtered.filter(t => moment(t.date).isSameOrBefore(endDate));
-    }
+        // Vérification du type
+        if (filters.type !== 'all' && transaction.type !== filters.type) {
+          return false;
+        }
 
-    if (filters.type !== 'all') {
-      filtered = filtered.filter(t => t.type === filters.type);
-    }
-    if (filters.minAmount) {
-      filtered = filtered.filter(t => t.amount >= parseFloat(filters.minAmount));
-    }
-    if (filters.maxAmount) {
-      filtered = filtered.filter(t => t.amount <= parseFloat(filters.maxAmount));
-    }
+        // Obtenir le montant effectif (positif pour revenus, négatif pour dépenses)
+        const effectiveAmount = transaction.type === 'expense' ? -transaction.amount : transaction.amount;
+
+        // Vérification du montant minimum
+        if (filters.minAmount) {
+          const minAmount = parseFloat(filters.minAmount);
+          if (transaction.type === 'expense') {
+            // Pour les dépenses, comparer avec la valeur absolue
+            if (Math.abs(effectiveAmount) < Math.abs(minAmount)) {
+              return false;
+            }
+          } else {
+            // Pour les revenus, comparer normalement
+            if (effectiveAmount < minAmount) {
+              return false;
+            }
+          }
+        }
+
+        // Vérification du montant maximum
+        if (filters.maxAmount) {
+          const maxAmount = parseFloat(filters.maxAmount);
+          if (transaction.type === 'expense') {
+            // Pour les dépenses, comparer avec la valeur absolue
+            if (Math.abs(effectiveAmount) > Math.abs(maxAmount)) {
+              return false;
+            }
+          } else {
+            // Pour les revenus, comparer normalement
+            if (effectiveAmount > maxAmount) {
+              return false;
+            }
+          }
+        }
+
+        // Vérification de la recherche
+        if (filters.searchQuery) {
+          const searchLower = filters.searchQuery.toLowerCase();
+          const descriptionLower = transaction.description.toLowerCase();
+          if (!descriptionLower.includes(searchLower)) {
+            return false;
+          }
+        }
+
+        return true;
+      });
+    };
+
+    let filtered = getFilteredTransactions();
 
     setFilteredTransactions(filtered);
   }, [transactions, filters]);
@@ -201,23 +235,129 @@ export default function Dashboard() {
     }
   };
 
-  const handleEditTransaction = (transaction) => {
-    setSelectedTransaction(transaction);
+  const handleEditClick = (transaction) => {
+    setIsEditing(true);
+    setEditingTransaction(transaction);
+    setDescription(transaction.description);
+    setAmount(transaction.amount.toString());
+    setType(transaction.type);
+    setDate(moment(transaction.date).format('YYYY-MM-DD'));
     setIsTransactionModalOpen(true);
   };
 
-  const handleDeleteTransaction = async (transactionId) => {
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    
+    if (!amount || !date) {
+      toast.error('Veuillez remplir le montant et la date');
+      return;
+    }
+
     try {
-      await deleteDoc(doc(db, 'users', currentUser.uid, 'transactions', transactionId));
-      
-      // Créer un tableau des transactions restantes après la suppression
-      const remainingTransactions = transactions.filter(t => t.id !== transactionId);
-      updateFilterDates(remainingTransactions);
-      
-      toast.success('Transaction supprimée avec succès');
+      if (isEditing && editingTransaction) {
+        // Mode édition
+        const transactionRef = doc(db, 'users', currentUser.uid, 'transactions', editingTransaction.id);
+        
+        const updatedData = {
+          description: description || 'Sans description',
+          amount: parseFloat(amount),
+          type,
+          date: Timestamp.fromDate(new Date(date)),
+          updatedAt: serverTimestamp()
+        };
+
+        await updateDoc(transactionRef, updatedData);
+        toast.success('Transaction modifiée avec succès');
+      } else {
+        // Mode ajout
+        const transactionData = {
+          description: description || 'Sans description',
+          amount: parseFloat(amount),
+          type,
+          date: Timestamp.fromDate(new Date(date)),
+          createdAt: serverTimestamp(),
+        };
+
+        if (isRecurring) {
+          // Créer les transactions récurrentes jusqu'à la date de fin
+          let currentDate = new Date(date);
+          const initialDate = new Date(date);
+          const endDate = recurrenceEndDate ? new Date(recurrenceEndDate) : moment().add(1, 'year').toDate();
+          const transactions = [];
+
+          while (currentDate <= endDate) {
+            const recurringTransaction = {
+              ...transactionData,
+              date: Timestamp.fromDate(currentDate),
+              recurring: {
+                interval: recurrenceInterval,
+                frequency: parseInt(recurrenceFrequency),
+                endDate: recurrenceEndDate ? Timestamp.fromDate(new Date(recurrenceEndDate)) : null,
+                useLastDayOfMonth,
+                initialDate: Timestamp.fromDate(new Date(date))
+              }
+            };
+
+            transactions.push(recurringTransaction);
+
+            currentDate = calculateNextDate(
+              currentDate,
+              recurrenceInterval,
+              parseInt(recurrenceFrequency),
+              initialDate,
+              useLastDayOfMonth
+            );
+          }
+
+          // Utiliser une opération batch pour ajouter toutes les transactions en une fois
+          const batch = writeBatch(db);
+          
+          transactions.forEach(transaction => {
+            const newTransactionRef = doc(collection(db, 'users', currentUser.uid, 'transactions'));
+            batch.set(newTransactionRef, transaction);
+          });
+
+          // Exécuter le batch
+          await batch.commit();
+          
+          // Fermer le modal et réinitialiser les champs
+          handleCloseModal();
+          
+          // Attendre que les transactions soient chargées avant de réinitialiser les filtres
+          // reset les fitres de date 
+          setFilters({
+            startDate: '',
+            endDate: '',
+            type: 'all',
+            minAmount: '',
+            maxAmount: '',
+            searchQuery: ''
+          });
+          toast.success(`${transactions.length} transactions récurrentes ajoutées avec succès`);
+        } else {
+          await addDoc(collection(db, 'users', currentUser.uid, 'transactions'), transactionData);
+          const newDate = new Date(date);
+          updateFilterDates([...transactions, { date: newDate }]);
+          handleCloseModal();
+          toast.success('Transaction ajoutée avec succès');
+        }
+      }
+
+      // Réinitialisation des champs
+      setDescription('');
+      setAmount('');
+      setDate(moment().format('YYYY-MM-DD'));
+      setType('expense');
+      setIsRecurring(false);
+      setRecurrenceInterval('month');
+      setRecurrenceFrequency(1);
+      setRecurrenceEndDate(moment().add(1, 'year').format('YYYY-MM-DD'));
+      setUseLastDayOfMonth(false);
+      setIsEditing(false);
+      setEditingTransaction(null);
     } catch (error) {
-      console.error('Erreur lors de la suppression:', error);
-      toast.error('Erreur lors de la suppression de la transaction');
+      console.error('Erreur lors de l\'opération:', error);
+      toast.error(isEditing ? 'Erreur lors de la modification' : 'Erreur lors de l\'ajout');
     }
   };
 
@@ -312,109 +452,34 @@ export default function Dashboard() {
   };
 
   const updateFilterDates = (transactions) => {
-    if (transactions.length > 0) {
-      const dates = transactions.map(t => t.date);
-      const oldestDate = moment(Math.min(...dates)).format('YYYY-MM-DD');
-      const futurestDate = moment(Math.max(...dates)).format('YYYY-MM-DD');
-      
-      setFilters(prev => ({
-        ...prev,
-        startDate: oldestDate,
-        endDate: futurestDate
-      }));
-    } else {
-      setFilters(prev => ({
-        ...prev,
-        startDate: '',
-        endDate: ''
-      }));
-    }
+    if (!transactions || transactions.length === 0) return;
+
+    const validTransactions = transactions.filter(t => t.date instanceof Date);
+    if (validTransactions.length === 0) return;
+
+    const dates = validTransactions.map(t => new Date(t.date));
+    const minDate = new Date(Math.min(...dates));
+    const maxDate = new Date(Math.max(...dates));
+
+    setFilters(prev => ({
+      ...prev,
+      startDate: moment(minDate).format('YYYY-MM-DD'),
+      endDate: moment(maxDate).format('YYYY-MM-DD')
+    }));
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    
-    if (!amount || !date) {
-      toast.error('Veuillez remplir le montant et la date');
-      return;
-    }
-
+  const handleDeleteTransaction = async (transactionId) => {
     try {
-      const transactionData = {
-        description: description || 'Sans description',
-        amount: parseFloat(amount),
-        type,
-        date: Timestamp.fromDate(new Date(date)),
-        createdAt: serverTimestamp(),
-      };
-
-      if (isRecurring) {
-        transactionData.recurring = {
-          interval: recurrenceInterval,
-          frequency: parseInt(recurrenceFrequency),
-          endDate: recurrenceEndDate ? Timestamp.fromDate(new Date(recurrenceEndDate)) : null,
-          useLastDayOfMonth,
-          initialDate: Timestamp.fromDate(new Date(date))
-        };
-
-        // Créer les transactions récurrentes jusqu'à la date de fin
-        let currentDate = new Date(date);
-        const initialDate = new Date(date);
-        const endDate = recurrenceEndDate ? new Date(recurrenceEndDate) : moment().add(1, 'year').toDate();
-        const transactions = [];
-
-        while (currentDate <= endDate) {
-          const recurringTransaction = {
-            ...transactionData,
-            date: Timestamp.fromDate(currentDate),
-            recurring: {
-              ...transactionData.recurring,
-              isRecurrence: true
-            }
-          };
-
-          transactions.push(recurringTransaction);
-
-          currentDate = calculateNextDate(
-            currentDate,
-            recurrenceInterval,
-            parseInt(recurrenceFrequency),
-            initialDate,
-            useLastDayOfMonth
-          );
-        }
-
-        // Utiliser une opération batch pour ajouter toutes les transactions en une fois
-        const batch = writeBatch(db);
-        
-        transactions.forEach(transaction => {
-          const newTransactionRef = doc(collection(db, 'users', currentUser.uid, 'transactions'));
-          batch.set(newTransactionRef, transaction);
-        });
-
-        // Exécuter le batch
-        await batch.commit();
-        
-        updateFilterDates([...transactions, ...transactions]); // Mettre à jour les dates après l'ajout
-        toast.success(`${transactions.length} transactions récurrentes ajoutées avec succès`);
-      } else {
-        await addDoc(collection(db, 'users', currentUser.uid, 'transactions'), transactionData);
-        const newDate = new Date(date);
-        updateFilterDates([...transactions, { date: newDate }]); // Mettre à jour les dates après l'ajout
-        toast.success('Transaction ajoutée avec succès');
-      }
-
-      setDescription('');
-      setAmount('');
-      setDate(moment().format('YYYY-MM-DD'));
-      setIsRecurring(false);
-      setRecurrenceInterval('month');
-      setRecurrenceFrequency(1);
-      setRecurrenceEndDate(moment().add(1, 'year').format('YYYY-MM-DD'));
-      setUseLastDayOfMonth(false);
+      await deleteDoc(doc(db, 'users', currentUser.uid, 'transactions', transactionId));
+      
+      // Créer un tableau des transactions restantes après la suppression
+      const remainingTransactions = transactions.filter(t => t.id !== transactionId);
+      updateFilterDates(remainingTransactions);
+      
+      toast.success('Transaction supprimée avec succès');
     } catch (error) {
-      console.error('Erreur lors de l\'ajout de la transaction:', error);
-      toast.error('Erreur lors de l\'ajout de la transaction');
+      console.error('Erreur lors de la suppression:', error);
+      toast.error('Erreur lors de la suppression de la transaction');
     }
   };
 
@@ -517,7 +582,8 @@ export default function Dashboard() {
           <div className="flex gap-4">
             <button
               onClick={() => {
-                setSelectedTransaction(null);
+                setIsEditing(false);
+                setEditingTransaction(null);
                 setIsTransactionModalOpen(true);
               }}
               className="btn-primary"
@@ -608,9 +674,20 @@ export default function Dashboard() {
 
         </div>
 
-        
-
-        
+        <div className="mb-8">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Graphique du solde
+            </h2>
+            <button
+              onClick={() => setShowChart(!showChart)}
+              className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+            >
+              {showChart ? 'Masquer le graphique' : 'Afficher le graphique'}
+            </button>
+          </div>
+          {showChart && <BalanceChart transactions={filteredTransactions} />}
+        </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md">
           <div className="p-6">
@@ -774,16 +851,14 @@ export default function Dashboard() {
                                   transaction.amount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
                                 </p>
                                 <button
-                                  onClick={() => handleEditTransaction(transaction)}
-                                  className="p-2 text-gray-600 hover:text-primary-600 dark:text-gray-400 dark:hover:text-primary-400 transition-colors"
-                                  title="Modifier"
+                                  onClick={() => handleEditClick(transaction)}
+                                  className="text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200"
                                 >
                                   <PencilIcon className="h-5 w-5" />
                                 </button>
                                 <button
                                   onClick={() => handleDeleteTransaction(transaction.id)}
-                                  className="p-2 text-gray-600 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 transition-colors"
-                                  title="Supprimer"
+                                  className="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-200"
                                 >
                                   <TrashIcon className="h-5 w-5" />
                                 </button>
@@ -804,7 +879,7 @@ export default function Dashboard() {
         <Modal
           isOpen={isTransactionModalOpen}
           onClose={handleCloseModal}
-          title={selectedTransaction ? "Modifier la transaction" : "Nouvelle transaction"}
+          title={editingTransaction ? "Modifier la transaction" : "Nouvelle transaction"}
         >
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
