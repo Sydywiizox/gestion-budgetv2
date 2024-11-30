@@ -268,6 +268,15 @@ export default function Dashboard() {
 
         await updateDoc(transactionRef, updatedData);
         toast.success('Transaction modifiée avec succès');
+        
+        // Réinitialisation immédiate après la mise à jour
+        setDescription('');
+        setAmount('');
+        setDate(moment().format('YYYY-MM-DD'));
+        setType('expense');
+        setIsEditing(false);
+        setEditingTransaction(null);
+        setIsTransactionModalOpen(false); // Ferme le modal
       } else {
         // Mode ajout
         const transactionData = {
@@ -344,17 +353,11 @@ export default function Dashboard() {
       }
 
       // Réinitialisation des champs
-      setDescription('');
-      setAmount('');
-      setDate(moment().format('YYYY-MM-DD'));
-      setType('expense');
       setIsRecurring(false);
       setRecurrenceInterval('month');
       setRecurrenceFrequency(1);
       setRecurrenceEndDate(moment().add(1, 'year').format('YYYY-MM-DD'));
       setUseLastDayOfMonth(false);
-      setIsEditing(false);
-      setEditingTransaction(null);
     } catch (error) {
       console.error('Erreur lors de l\'opération:', error);
       toast.error(isEditing ? 'Erreur lors de la modification' : 'Erreur lors de l\'ajout');
@@ -363,7 +366,17 @@ export default function Dashboard() {
 
   const handleCloseModal = () => {
     setIsTransactionModalOpen(false);
-    setSelectedTransaction(null);
+    setDescription('');
+    setAmount('');
+    setDate(moment().format('YYYY-MM-DD'));
+    setType('expense');
+    setIsEditing(false);
+    setEditingTransaction(null);
+    setIsRecurring(false);
+    setRecurrenceInterval('month');
+    setRecurrenceFrequency(1);
+    setRecurrenceEndDate(moment().add(1, 'year').format('YYYY-MM-DD'));
+    setUseLastDayOfMonth(false);
   };
 
   // Fonction pour grouper les transactions
