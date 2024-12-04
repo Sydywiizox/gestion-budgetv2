@@ -505,7 +505,51 @@ export default function Dashboard() {
   const updateFilterDates = (transactions) => {
     if (!transactions || transactions.length === 0) return;
 
-    const validTransactions = transactions.filter(t => t.date instanceof Date);
+    // Filtrer les transactions en fonction des préférences d'affichage
+    const currentMonth = moment().startOf('month');
+    const nextMonth = moment().add(1, 'month').startOf('month');
+    const previousMonth = moment().subtract(1, 'month').startOf('month');
+
+    const visibleTransactions = transactions.filter(transaction => {
+      const transactionDate = moment(transaction.date);
+      
+      // Transactions du mois en cours - toujours affichées
+      if (transactionDate.isSame(currentMonth, 'month')) {
+        return true;
+      }
+      
+      // Transactions du mois suivant
+      if (transactionDate.isSame(nextMonth, 'month')) {
+        return showFutureTransactions;
+      }
+      
+      // Transactions du mois précédent
+      if (transactionDate.isSame(previousMonth, 'month')) {
+        return showPastTransactions;
+      }
+      
+      // Autres transactions plus anciennes ou futures
+      if (transactionDate.isBefore(previousMonth, 'month')) {
+        return showPastTransactions;
+      }
+      if (transactionDate.isAfter(nextMonth, 'month')) {
+        return showFutureTransactions;
+      }
+      
+      return true;
+    });
+
+    if (visibleTransactions.length === 0) {
+      // Si aucune transaction visible, réinitialiser les filtres
+      setFilters(prev => ({
+        ...prev,
+        startDate: '',
+        endDate: ''
+      }));
+      return;
+    }
+
+    const validTransactions = visibleTransactions.filter(t => t.date instanceof Date);
     if (validTransactions.length === 0) return;
 
     const dates = validTransactions.map(t => new Date(t.date));
@@ -518,6 +562,13 @@ export default function Dashboard() {
       endDate: moment(maxDate).format('YYYY-MM-DD')
     }));
   };
+
+  // Ajouter un effet pour mettre à jour les filtres quand les préférences d'affichage changent
+  useEffect(() => {
+    if (transactions.length > 0) {
+      updateFilterDates(transactions);
+    }
+  }, [showPastTransactions, showFutureTransactions, transactions]);
 
   const handleDeleteTransaction = async (transactionId) => {
     try {
