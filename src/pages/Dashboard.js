@@ -22,6 +22,7 @@ import Modal from '../components/Modal';
 import BalanceChart from '../components/BalanceChart';
 import { useNavigate } from 'react-router-dom';
 import { PencilIcon, TrashIcon, FunnelIcon, MagnifyingGlassIcon } from '@heroicons/react/24/outline';
+import { ChevronUpIcon, ChevronDownIcon, CalendarDaysIcon } from '@heroicons/react/24/solid';
 
 export default function Dashboard() {
   const { currentUser, logout } = useAuth();
@@ -54,6 +55,9 @@ export default function Dashboard() {
   const [showChart, setShowChart] = useState(true); // Nouvel état pour contrôler l'affichage du graphique
   const [isEditing, setIsEditing] = useState(false);
   const [editingTransaction, setEditingTransaction] = useState(null);
+  const [showFutureTransactions, setShowFutureTransactions] = useState(false);
+  const [showPastTransactions, setShowPastTransactions] = useState(false);
+  const [showScrollButtons, setShowScrollButtons] = useState(false);
 
   useEffect(() => {
     if (!currentUser) return;
@@ -381,9 +385,43 @@ export default function Dashboard() {
 
   // Fonction pour grouper les transactions
   const groupTransactionsByDate = (transactions) => {
-    moment.locale('fr'); // S'assurer que moment est en français
+    moment.locale('fr');
     
-    const grouped = transactions.reduce((acc, transaction) => {
+    // Filtrer les transactions en fonction des préférences d'affichage
+    const currentMonth = moment().startOf('month');
+    const nextMonth = moment().add(1, 'month').startOf('month');
+    const previousMonth = moment().subtract(1, 'month').startOf('month');
+
+    const filteredTransactions = transactions.filter(transaction => {
+      const transactionDate = moment(transaction.date);
+      
+      // Transactions du mois en cours - toujours affichées
+      if (transactionDate.isSame(currentMonth, 'month')) {
+        return true;
+      }
+      
+      // Transactions du mois suivant
+      if (transactionDate.isSame(nextMonth, 'month')) {
+        return showFutureTransactions;
+      }
+      
+      // Transactions du mois précédent
+      if (transactionDate.isSame(previousMonth, 'month')) {
+        return showPastTransactions;
+      }
+      
+      // Autres transactions plus anciennes ou futures
+      if (transactionDate.isBefore(previousMonth, 'month')) {
+        return showPastTransactions;
+      }
+      if (transactionDate.isAfter(nextMonth, 'month')) {
+        return showFutureTransactions;
+      }
+      
+      return true;
+    });
+
+    const grouped = filteredTransactions.reduce((acc, transaction) => {
       const monthKey = moment(transaction.date).format('MMMM YYYY');
       const dayKey = moment(transaction.date).format('D MMMM YYYY');
       
@@ -580,6 +618,54 @@ export default function Dashboard() {
     }
   };
 
+  // Fonction pour détecter le scroll et afficher/masquer les boutons
+  useEffect(() => {
+    const handleScroll = () => {
+      setShowScrollButtons(window.scrollY > 200);
+    };
+
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Fonction pour scroller en haut de la liste des transactions
+  const scrollToTop = () => {
+    const transactionsList = document.getElementById('transactions-list');
+    if (transactionsList) {
+      transactionsList.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  // Fonction pour scroller en bas
+  const scrollToBottom = () => {
+    window.scrollTo({ 
+      top: document.documentElement.scrollHeight,
+      behavior: 'smooth'
+    });
+  };
+
+  // Fonction pour scroller à la date la plus proche
+  const scrollToCurrentDate = () => {
+    const today = moment();
+    const allDates = Array.from(document.querySelectorAll('[data-date]')).map(element => ({
+      element,
+      date: moment(element.getAttribute('data-date'), 'D MMMM YYYY'),
+      diff: Math.abs(moment(element.getAttribute('data-date'), 'D MMMM YYYY').diff(today, 'days'))
+    }));
+
+    if (allDates.length > 0) {
+      // Trier par différence avec aujourd'hui et prendre la plus proche
+      const closestDate = allDates.reduce((prev, curr) => 
+        prev.diff < curr.diff ? prev : curr
+      );
+
+      closestDate.element.scrollIntoView({ 
+        behavior: 'smooth', 
+        block: 'center' 
+      });
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 dark:bg-gray-900">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -703,12 +789,26 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md">
-          <div className="p-6">
+          <div id="transactions-list" className="p-6">
             <div className="flex justify-between items-center mb-4">
               <div className="flex items-center gap-4">
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
                   Transactions récentes
                 </h2>
+                <div className="flex gap-4">
+                  <button
+                    onClick={() => setShowPastTransactions(!showPastTransactions)}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                  >
+                    {showPastTransactions ? 'Masquer les opérations passées' : 'Afficher les opérations passées'}
+                  </button>
+                  <button
+                    onClick={() => setShowFutureTransactions(!showFutureTransactions)}
+                    className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500 focus:ring-offset-2 transition-colors dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600"
+                  >
+                    {showFutureTransactions ? 'Masquer les opérations à venir' : 'Afficher les opérations à venir'}
+                  </button>
+                </div>
                 <div className="relative">
                   <input
                     type="text"
@@ -833,7 +933,7 @@ export default function Dashboard() {
                     </div>
                     
                     {Object.entries(monthData.days).map(([day, dayData]) => (
-                      <div key={day} className="space-y-2">
+                      <div key={day} className="space-y-2" data-date={day}>
                         <div className="flex items-center justify-between bg-gray-50 dark:bg-gray-700 p-2 rounded-lg">
                           <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
                             {day}
@@ -1106,6 +1206,35 @@ export default function Dashboard() {
             </div>
           </div>
         </Modal>
+
+        {/* Boutons de navigation fixes */}
+        {showScrollButtons && (
+          <div className="fixed bottom-6 right-6 flex flex-col gap-2 z-50">
+            <button
+              onClick={scrollToTop}
+              className="p-3 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors"
+              title="Aller en haut"
+            >
+              <ChevronUpIcon className="h-6 w-6" />
+            </button>
+            
+            <button
+              onClick={scrollToCurrentDate}
+              className="p-3 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors"
+              title="Aller à la date actuelle"
+            >
+              <CalendarDaysIcon className="h-6 w-6" />
+            </button>
+            
+            <button
+              onClick={scrollToBottom}
+              className="p-3 bg-primary-600 text-white rounded-full shadow-lg hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 transition-colors"
+              title="Aller en bas"
+            >
+              <ChevronDownIcon className="h-6 w-6" />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
