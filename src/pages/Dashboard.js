@@ -58,6 +58,7 @@ export default function Dashboard() {
   const [showFutureTransactions, setShowFutureTransactions] = useState(false);
   const [showPastTransactions, setShowPastTransactions] = useState(false);
   const [showScrollButtons, setShowScrollButtons] = useState(false);
+  const [monthCutoffDay, setMonthCutoffDay] = useState(26); // Jour de changement de mois par défaut
 
   useEffect(() => {
     if (!currentUser) return;
@@ -95,9 +96,11 @@ export default function Dashboard() {
         const amount = transaction.amount || 0;
         const transactionAmount = transaction.type === 'income' ? amount : -amount;
         const transactionDate = moment(transaction.date);
+        const transactionAccountingMonth = getAccountingMonth(transactionDate);
+        const currentAccountingMonth = getAccountingMonth(now);
         
-        // Si la transaction est dans le futur, l'ajouter au solde futur
-        if (transactionDate.isAfter(now, 'day')) {
+        // Si la transaction est dans le futur selon le mois comptable
+        if (transactionAccountingMonth.isAfter(currentAccountingMonth, 'month')) {
           futureBalance += transactionAmount;
         } else {
           // Sinon, l'ajouter au solde actuel
@@ -111,8 +114,8 @@ export default function Dashboard() {
       });
 
       // Calculer les statistiques mensuelles
-      const currentMonthStart = moment().startOf('month');
-      const previousMonthStart = moment().subtract(1, 'month').startOf('month');
+      const currentAccountingMonth = getAccountingMonth(now);
+      const previousAccountingMonth = moment(currentAccountingMonth).subtract(1, 'month');
 
       const currentMonthStats = {
         income: 0,
@@ -127,14 +130,15 @@ export default function Dashboard() {
       transactionsData.forEach(transaction => {
         const amount = transaction.amount || 0;
         const transactionDate = moment(transaction.date);
+        const transactionAccountingMonth = getAccountingMonth(transactionDate);
         
-        if (transactionDate.isSame(currentMonthStart, 'month')) {
+        if (transactionAccountingMonth.isSame(currentAccountingMonth, 'month')) {
           if (transaction.type === 'income') {
             currentMonthStats.income += amount;
           } else {
             currentMonthStats.expenses += amount;
           }
-        } else if (transactionDate.isSame(previousMonthStart, 'month')) {
+        } else if (transactionAccountingMonth.isSame(previousAccountingMonth, 'month')) {
           if (transaction.type === 'income') {
             previousMonthStats.income += amount;
           } else {
@@ -155,7 +159,7 @@ export default function Dashboard() {
     });
 
     return () => unsubscribe();
-  }, [currentUser]);
+  }, [monthCutoffDay]);
 
   useEffect(() => {
     const getFilteredTransactions = () => {
@@ -383,38 +387,49 @@ export default function Dashboard() {
     setUseLastDayOfMonth(false);
   };
 
-  // Fonction pour grouper les transactions
+  // Fonction pour déterminer le mois comptable d'une date
+  const getAccountingMonth = (date) => {
+    const day = moment(date).date();
+    if (day >= monthCutoffDay) {
+      return moment(date).add(1, 'month').startOf('month');
+    }
+    return moment(date).startOf('month');
+  };
+
+  // Modifier la fonction groupTransactionsByDate
   const groupTransactionsByDate = (transactions) => {
     moment.locale('fr');
     
-    // Filtrer les transactions en fonction des préférences d'affichage
-    const currentMonth = moment().startOf('month');
-    const nextMonth = moment().add(1, 'month').startOf('month');
-    const previousMonth = moment().subtract(1, 'month').startOf('month');
+    // Calculer les mois comptables
+    const today = moment();
+    const currentAccountingMonth = getAccountingMonth(today);
+    const nextAccountingMonth = moment(currentAccountingMonth).add(1, 'month');
+    const previousAccountingMonth = moment(currentAccountingMonth).subtract(1, 'month');
 
     const filteredTransactions = transactions.filter(transaction => {
       const transactionDate = moment(transaction.date);
+      const transactionAccountingMonth = getAccountingMonth(transactionDate);
       
-      // Transactions du mois en cours - toujours affichées
-      if (transactionDate.isSame(currentMonth, 'month')) {
+      // Transactions du mois comptable en cours
+      if (transactionAccountingMonth.isSame(currentAccountingMonth, 'month')) {
         return true;
       }
       
-      // Transactions du mois suivant
-      if (transactionDate.isSame(nextMonth, 'month')) {
+      // Transactions du mois comptable suivant
+      if (transactionAccountingMonth.isSame(nextAccountingMonth, 'month')) {
         return showFutureTransactions;
       }
       
-      // Transactions du mois précédent
-      if (transactionDate.isSame(previousMonth, 'month')) {
+      // Transactions du mois comptable précédent
+      if (transactionAccountingMonth.isSame(previousAccountingMonth, 'month')) {
         return showPastTransactions;
       }
       
       // Autres transactions plus anciennes ou futures
-      if (transactionDate.isBefore(previousMonth, 'month')) {
+      if (transactionAccountingMonth.isBefore(previousAccountingMonth, 'month')) {
         return showPastTransactions;
       }
-      if (transactionDate.isAfter(nextMonth, 'month')) {
+      if (transactionAccountingMonth.isAfter(nextAccountingMonth, 'month')) {
         return showFutureTransactions;
       }
       
@@ -502,37 +517,39 @@ export default function Dashboard() {
     }
   };
 
+  // Modifier la fonction updateFilterDates
   const updateFilterDates = (transactions) => {
     if (!transactions || transactions.length === 0) return;
 
-    // Filtrer les transactions en fonction des préférences d'affichage
-    const currentMonth = moment().startOf('month');
-    const nextMonth = moment().add(1, 'month').startOf('month');
-    const previousMonth = moment().subtract(1, 'month').startOf('month');
+    const today = moment();
+    const currentAccountingMonth = getAccountingMonth(today);
+    const nextAccountingMonth = moment(currentAccountingMonth).add(1, 'month');
+    const previousAccountingMonth = moment(currentAccountingMonth).subtract(1, 'month');
 
     const visibleTransactions = transactions.filter(transaction => {
       const transactionDate = moment(transaction.date);
+      const transactionAccountingMonth = getAccountingMonth(transactionDate);
       
-      // Transactions du mois en cours - toujours affichées
-      if (transactionDate.isSame(currentMonth, 'month')) {
+      // Transactions du mois comptable en cours
+      if (transactionAccountingMonth.isSame(currentAccountingMonth, 'month')) {
         return true;
       }
       
-      // Transactions du mois suivant
-      if (transactionDate.isSame(nextMonth, 'month')) {
+      // Transactions du mois comptable suivant
+      if (transactionAccountingMonth.isSame(nextAccountingMonth, 'month')) {
         return showFutureTransactions;
       }
       
-      // Transactions du mois précédent
-      if (transactionDate.isSame(previousMonth, 'month')) {
+      // Transactions du mois comptable précédent
+      if (transactionAccountingMonth.isSame(previousAccountingMonth, 'month')) {
         return showPastTransactions;
       }
       
       // Autres transactions plus anciennes ou futures
-      if (transactionDate.isBefore(previousMonth, 'month')) {
+      if (transactionAccountingMonth.isBefore(previousAccountingMonth, 'month')) {
         return showPastTransactions;
       }
-      if (transactionDate.isAfter(nextMonth, 'month')) {
+      if (transactionAccountingMonth.isAfter(nextAccountingMonth, 'month')) {
         return showFutureTransactions;
       }
       
@@ -540,7 +557,6 @@ export default function Dashboard() {
     });
 
     if (visibleTransactions.length === 0) {
-      // Si aucune transaction visible, réinitialiser les filtres
       setFilters(prev => ({
         ...prev,
         startDate: '',
@@ -562,6 +578,24 @@ export default function Dashboard() {
       endDate: moment(maxDate).format('YYYY-MM-DD')
     }));
   };
+
+  // Ajouter un composant de configuration pour le jour de changement de mois
+  const MonthCutoffSetting = () => (
+    <div className="mb-4 flex items-center gap-4">
+      <label htmlFor="monthCutoffDay" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        Jour de changement de mois :
+      </label>
+      <input
+        type="number"
+        id="monthCutoffDay"
+        min="1"
+        max="31"
+        value={monthCutoffDay}
+        onChange={(e) => setMonthCutoffDay(parseInt(e.target.value, 10))}
+        className="w-20 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white sm:text-sm"
+      />
+    </div>
+  );
 
   // Ajouter un effet pour mettre à jour les filtres quand les préférences d'affichage changent
   useEffect(() => {
@@ -752,6 +786,27 @@ export default function Dashboard() {
             >
               Se déconnecter
             </button>
+          </div>
+        </div>
+
+        {/* Ajouter le paramètre de configuration */}
+        <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 mb-4">
+          <div className="flex items-center gap-4">
+            <label htmlFor="monthCutoffDay" className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              Jour de changement de mois :
+            </label>
+            <input
+              type="number"
+              id="monthCutoffDay"
+              min="1"
+              max="31"
+              value={monthCutoffDay}
+              onChange={(e) => setMonthCutoffDay(parseInt(e.target.value, 10))}
+              className="w-20 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white sm:text-sm"
+            />
+            <span className="text-sm text-gray-500 dark:text-gray-400">
+              (Les transactions à partir de ce jour seront comptabilisées dans le mois suivant)
+            </span>
           </div>
         </div>
 
