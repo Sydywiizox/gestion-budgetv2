@@ -13,7 +13,9 @@ import {
   Timestamp, 
   writeBatch, 
   getDocs,
-  updateDoc
+  updateDoc,
+  setDoc,
+  getDoc
 } from 'firebase/firestore';
 import moment from 'moment';
 import 'moment/locale/fr';
@@ -58,7 +60,7 @@ export default function Dashboard() {
   const [showFutureTransactions, setShowFutureTransactions] = useState(false);
   const [showPastTransactions, setShowPastTransactions] = useState(false);
   const [showScrollButtons, setShowScrollButtons] = useState(false);
-  const [monthCutoffDay, setMonthCutoffDay] = useState(26); // Jour de changement de mois par défaut
+  const [monthCutoffDay, setMonthCutoffDay] = useState(0); // Initialiser avec la valeur par défaut
 
   useEffect(() => {
     if (!currentUser) return;
@@ -581,23 +583,47 @@ export default function Dashboard() {
     }));
   };
 
-  // Ajouter un composant de configuration pour le jour de changement de mois
-  const MonthCutoffSetting = () => (
-    <div className="mb-4 flex items-center gap-4">
-      <label htmlFor="monthCutoffDay" className="text-sm font-medium text-gray-700 dark:text-gray-300">
-        Jour de changement de mois :
-      </label>
-      <input
-        type="number"
-        id="monthCutoffDay"
-        min="1"
-        max="31"
-        value={monthCutoffDay}
-        onChange={(e) => setMonthCutoffDay(parseInt(e.target.value, 10))}
-        className="w-20 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white sm:text-sm"
-      />
-    </div>
-  );
+  // Charger le monthCutoffDay depuis Firebase au chargement
+  useEffect(() => {
+    const loadSettings = async () => {
+      if (!currentUser) return;
+      
+      try {
+        const settingsRef = doc(db, 'users', currentUser.uid, 'settings', 'general');
+        const settingsDoc = await getDoc(settingsRef);
+        
+        if (settingsDoc.exists()) {
+          const settings = settingsDoc.data();
+          if (settings.monthCutoffDay !== undefined) {
+            setMonthCutoffDay(settings.monthCutoffDay);
+          }
+        } else {
+          // Créer le document avec la valeur par défaut
+          await setDoc(settingsRef, { monthCutoffDay: 26 });
+        }
+      } catch (error) {
+        console.error('Erreur lors du chargement des paramètres:', error);
+      }
+    };
+
+    loadSettings();
+  }, [currentUser]);
+
+  // Sauvegarder monthCutoffDay dans Firebase quand il change
+  const handleMonthCutoffDayChange = async (newValue) => {
+    const value = parseInt(newValue, 10);
+    if (value < 1 || value > 31) return;
+    
+    setMonthCutoffDay(value);
+    
+    try {
+      const settingsRef = doc(db, 'users', currentUser.uid, 'settings', 'general');
+      await setDoc(settingsRef, { monthCutoffDay: value }, { merge: true });
+    } catch (error) {
+      console.error('Erreur lors de la sauvegarde du paramètre:', error);
+      toast.error('Erreur lors de la sauvegarde du paramètre');
+    }
+  };
 
   // Ajouter un effet pour mettre à jour les filtres quand les préférences d'affichage changent
   useEffect(() => {
@@ -791,7 +817,7 @@ export default function Dashboard() {
           </div>
         </div>
 
-        {/* Ajouter le paramètre de configuration */}
+        {/* Modifier le paramètre de configuration */}
         <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-4 mb-4">
           <div className="flex items-center gap-4">
             <label htmlFor="monthCutoffDay" className="text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -803,7 +829,7 @@ export default function Dashboard() {
               min="1"
               max="31"
               value={monthCutoffDay}
-              onChange={(e) => setMonthCutoffDay(parseInt(e.target.value, 10))}
+              onChange={(e) => handleMonthCutoffDayChange(e.target.value)}
               className="w-20 rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white sm:text-sm"
             />
             <span className="text-sm text-gray-500 dark:text-gray-400">
