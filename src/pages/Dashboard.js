@@ -85,32 +85,34 @@ export default function Dashboard() {
       setTransactions(transactionsData);
       
       // Calculer les soldes
-      const now = new Date();
+      const now = moment().endOf('day');
       let currentBalance = 0;
-      let futureBalance = 0;
+      let futureVariation = 0;
+      let maxDate = moment(filters.endDate || now).endOf('day');
 
       // Trier les transactions par date
       const sortedTransactions = [...transactionsData].sort((a, b) => a.date - b.date);
 
+      // Calculer le solde actuel (toutes les transactions jusqu'à aujourd'hui inclus)
       sortedTransactions.forEach(transaction => {
         const amount = transaction.amount || 0;
         const transactionAmount = transaction.type === 'income' ? amount : -amount;
         const transactionDate = moment(transaction.date);
-        const transactionAccountingMonth = getAccountingMonth(transactionDate);
-        const currentAccountingMonth = getAccountingMonth(now);
         
-        // Si la transaction est dans le futur selon le mois comptable
-        if (transactionAccountingMonth.isAfter(currentAccountingMonth, 'month')) {
-          futureBalance += transactionAmount;
-        } else {
-          // Sinon, l'ajouter au solde actuel
+        // Si la transaction est jusqu'à aujourd'hui inclus
+        if (transactionDate.isSameOrBefore(now, 'day')) {
           currentBalance += transactionAmount;
+        }
+        // Si la transaction est future et dans la période filtrée
+        else if (transactionDate.isSameOrBefore(maxDate, 'day')) {
+          futureVariation += transactionAmount;
         }
       });
 
       setBalances({
         current: currentBalance,
-        future: currentBalance + futureBalance // Le solde futur inclut le solde actuel
+        future: currentBalance + futureVariation,
+        variation: futureVariation
       });
 
       // Calculer les statistiques mensuelles
@@ -159,7 +161,7 @@ export default function Dashboard() {
     });
 
     return () => unsubscribe();
-  }, [monthCutoffDay]);
+  }, [monthCutoffDay, filters.endDate]);
 
   useEffect(() => {
     const getFilteredTransactions = () => {
